@@ -3,6 +3,8 @@
 #include <chrono>
 #include <stdlib.h> //qsort()
 
+#include <omp.h>
+
 void swap(int* x, int* y) {
     int t = *x;
 
@@ -15,6 +17,88 @@ int cmp(const void* a, const void* b) {
     int y = *(int*)b;
 
     return x - y;
+}
+//	========================================================
+//
+// 		parallel Quicksort
+//
+//  ========================================================
+
+int neutralize(int* left, int* right, int p, int blocksize)
+{
+    int i,j;
+
+    do
+    {
+        for (i = 0; i < blocksize; i++)
+            if (left[i] > p ) break;
+
+        for (j = 0; j < blocksize; j++)
+            if (left[j] < p ) break;
+
+        if(i == blocksize || j == blocksize) break;
+
+        swap(&left[i], &right[j]);
+
+        i++;
+        j++;
+    }while(i < blocksize && j < blocksize);
+
+    if (i == blocksize && j == blocksize) return 2;
+    if (j == blocksize) return 1; //!!!!!! changed
+    return 0;
+}
+
+void partition_parallel(int* a, int l, int r, int left, int right, int sum_l, int sum_r, int blocksize)
+{
+
+    int thread_id = omp_get_thread_num();
+
+    #pragma omp barrier // ??
+    if(thread_id == 1)
+    {
+        int p = a[l];
+    }
+
+    // leftblock = a[0:blocksize]
+    // rightblock = a[N-blocksize:]
+
+    //left = 0;
+    //right = 0;
+
+    /*
+     while leftblock != NULL && rightblock != NULL
+        int res = neutralize(leftblock, rightblock, p)
+        if (res == 1 || res == 2)
+            get new leftblock
+            left ++
+        if (res == 0 || res == 2)
+            get new rightblock
+            right ++
+
+     if (leftblock != NULL)
+        remaining[pid] = leftblock
+
+     if (rightblock != NULL)
+        remaining[pid] = rightblock
+
+     sum_l += left * blocksize //??
+     sum_r += right * blocksize //??
+     */
+
+}
+
+void qs_parallel(int* a, int l, int r)
+{
+    int left = 0, right = 0, sum_l = 0, sum_r = 0;
+    int blocksize = 1024;
+
+    int* blocks;
+
+    #pragma omp parallel shared(left, right, sum_l, sum_r, blocks , l, r, blocksize) default(none) num_threads(4) // TODO define vars
+    {
+        partition_parallel(blocks, l, r, left, right, sum_l, sum_r, blocksize);
+    }
 }
 
 //	========================================================
