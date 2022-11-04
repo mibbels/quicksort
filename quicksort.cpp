@@ -26,9 +26,9 @@ int cmp(const void* a, const void* b) {
 
 int neutralize(int* left, int* right, int p, int blocksize)
 {
-    int i,j;
+    int i = 0,j = 0; //correct ??
 
-    do
+    while(i < blocksize && j < blocksize)
     {
         for (i = 0; i < blocksize; i++)
             if (left[i] > p ) break;
@@ -42,63 +42,107 @@ int neutralize(int* left, int* right, int p, int blocksize)
 
         i++;
         j++;
-    }while(i < blocksize && j < blocksize);
+    }
 
     if (i == blocksize && j == blocksize) return 2;
-    if (j == blocksize) return 1; //!!!!!! changed
+    if (j == blocksize) return 1; // changed correct?
     return 0;
 }
 
-void partition_parallel(int* a, int l, int r, int left, int right, int sum_l, int sum_r, int blocksize)
+
+////  TODO check for end condition
+int* get_block_right(int* a, int blocksize, int right, int size)
 {
-
-    int thread_id = omp_get_thread_num();
-
-    #pragma omp barrier // ??
-    if(thread_id == 1)
+    int* block = (int*) malloc(blocksize * sizeof(int));
+    for (int i = size - right * blocksize; i > size - (right + 1) * blocksize; i--)
     {
-        int p = a[l];
+        block[i] = a[i];
     }
-
-    // leftblock = a[0:blocksize]
-    // rightblock = a[N-blocksize:]
-
-    //left = 0;
-    //right = 0;
-
-    /*
-     while leftblock != NULL && rightblock != NULL
-        int res = neutralize(leftblock, rightblock, p)
-        if (res == 1 || res == 2)
-            get new leftblock
-            left ++
-        if (res == 0 || res == 2)
-            get new rightblock
-            right ++
-
-     if (leftblock != NULL)
-        remaining[pid] = leftblock
-
-     if (rightblock != NULL)
-        remaining[pid] = rightblock
-
-     sum_l += left * blocksize //??
-     sum_r += right * blocksize //??
-     */
-
+    return block;
 }
 
-void qs_parallel(int* a, int l, int r)
+////  TODO check for end condition
+int* get_block_left(int* a, int blocksize, int left)
 {
-    int left = 0, right = 0, sum_l = 0, sum_r = 0;
-    int blocksize = 1024;
-
-    int* blocks;
-
-    #pragma omp parallel shared(left, right, sum_l, sum_r, blocks , l, r, blocksize) default(none) num_threads(4) // TODO define vars
+    int* block = (int*) malloc(blocksize * sizeof(int));
+    for (int i = left * blocksize; i < (left + 1) * blocksize; i++)
     {
-        partition_parallel(blocks, l, r, left, right, sum_l, sum_r, blocksize);
+        block[i] = a[i];
     }
+    return block;
+}
+
+void partition_parallel(int* a, int &l, int &r, int &left, int &right, int &sum_l, int &sum_r, int &blocksize, int &size, int &p, int** remaining)
+{
+    int thread_id = omp_get_thread_num();
+    int tmp_left, tmp_right;
+    int* leftblock;
+    int* rightblock;
+
+    if(thread_id == 0)
+    {
+        p = a[l];
+    }
+    #pragma omp barrier
+
+    #pragma omp critical
+    {
+        tmp_left = left;
+        left++;
+    };
+    leftblock = get_block_left(a, blocksize, tmp_left);
+
+    #pragma omp critical
+    {
+        tmp_right = right;
+        right++;
+    };
+    rightblock = get_block_right(a, blocksize, tmp_right, size);
+
+     while (leftblock != NULL && rightblock != NULL) {
+         int res = neutralize(leftblock, rightblock, p, blocksize);
+         if (res == 1 || res == 2)
+         {
+            #pragma omp critical
+             {
+                 tmp_left = left + 1;
+                 left++;
+             };
+             leftblock = get_block_left(a, blocksize, tmp_left);
+         }
+         if (res == 0 || res == 2) {
+            #pragma omp critical
+             {
+                 tmp_right = right + 1;
+                 right++;
+             };
+             rightblock = get_block_right(a, blocksize, tmp_right, size);
+         }
+     }
+
+     if (leftblock != NULL)
+        remaining[thread_id] = leftblock;
+
+     if (rightblock != NULL)
+        remaining[thread_id] = rightblock;
+
+     sum_l += left * blocksize;
+     sum_r += right * blocksize;
+}
+
+int qs_parallel(int* a, int l, int r, int size)
+{
+    int left = 0, right = 0, sum_l = 0, sum_r = 0, p = 0;
+    int blocksize = 1024;
+    int n_threads = 4;
+    int** remaining = (int**)malloc(n_threads * sizeof(int*));
+
+    #pragma omp parallel shared(left, right, sum_l, sum_r, a , l, r, blocksize, size, p, remaining) default(none) num_threads(n_threads)
+    {
+        partition_parallel(a, l, r, left, right, sum_l, sum_r, blocksize, size, p, remaining);
+    }
+
+    return 0;
 }
 
 //	========================================================
@@ -219,8 +263,8 @@ void qs(int* a, int l, int r) {
 // -------------------------------------------------------------
 int main(void)
 {
-    std::chrono::duration<double> diff_lib, diff_qs, diff_3way;
-    int n, *arr_1, *arr_2, *arr_3;
+    std::chrono::duration<double> diff_lib, diff_qs, diff_3way, diff_parallel;
+    int n, *arr_1, *arr_2, *arr_3, *arr_4;
 
     std::cout << std::setw(10) << "n" << std::setw(10) << "lib" << std::setw(10) << "qs" << std::setw(10) << "3way" << std::endl;
 
@@ -230,6 +274,7 @@ int main(void)
         arr_1 = (int*)malloc(n * sizeof(int));
         arr_2 = (int*)malloc(n * sizeof(int));
         arr_3 = (int*)malloc(n * sizeof(int));
+        arr_4 = (int*)malloc(n * sizeof(int));
 
         if (!arr_1 || !arr_2 || !arr_3)
         {
@@ -242,22 +287,29 @@ int main(void)
             arr_1[j] = (int) ((rand() << 15) + rand()) %100000;
             arr_2[j] = arr_1[j];
             arr_3[j] = arr_1[j];
+            arr_4[j] = arr_1[j];
         }
 
         auto time_start = std::chrono::system_clock::now();
-        qsort(arr_1, n, sizeof(int), cmp);
+        //qsort(arr_1, n, sizeof(int), cmp);
         auto time_end = std::chrono::system_clock::now();
         diff_lib = time_end - time_start;
 
         time_start = std::chrono::system_clock::now();
-        qs(arr_2, 0, n - 1);
+        //qs(arr_2, 0, n - 1);
         time_end = std::chrono::system_clock::now();
         diff_qs = time_end - time_start;
 
         time_start = std::chrono::system_clock::now();
-        qs_3way(arr_3, 0, n - 1);
+        //qs_3way(arr_3, 0, n - 1);
         time_end = std::chrono::system_clock::now();
         diff_3way = time_end - time_start;
+
+        time_start = std::chrono::system_clock::now();
+        qs_parallel(arr_4, 0, n - 1, n);
+        time_end = std::chrono::system_clock::now();
+        diff_parallel = time_end - time_start;
+
 
         std::cout << std::setprecision(3) << std::setw(10) << "2^" << i << std::setw(10) << diff_lib.count() << std::setw(10) <<
                   diff_qs.count() << std::setw(10) << diff_3way.count() << std::endl;
