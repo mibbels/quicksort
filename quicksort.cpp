@@ -1,8 +1,7 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
-#include <stdlib.h> //qsort()
-
+#include <stdlib.h>
 #include <omp.h>
 
 void swap(int* x, int* y) {
@@ -24,124 +23,128 @@ int cmp(const void* a, const void* b) {
 //
 //  ========================================================
 
-int neutralize(int* left, int* right, int p, int blocksize)
+int neutralize(int* a, int leftoffset, int rightoffset, int p, int blocksize)
 {
-    int i = 0,j = 0; //correct ??
+    int i = 0,j = 0;
 
     while(i < blocksize && j < blocksize)
     {
-        for (i = 0; i < blocksize; i++)
-            if (left[i] > p ) break;
+        for (i = leftoffset; i < blocksize + leftoffset; i++)
+            if (a[i] > p ) break;
 
-        for (j = 0; j < blocksize; j++)
-            if (left[j] < p ) break;
+        for (j = rightoffset; j < blocksize + rightoffset; j++)
+            if (a[j] < p ) break;
 
         if(i == blocksize || j == blocksize) break;
 
-        swap(&left[i], &right[j]);
+        swap(&a[i], &a[j]);
 
         i++;
         j++;
     }
 
-    if (i == blocksize && j == blocksize) return 2;
-    if (j == blocksize) return 1; // changed correct?
-    return 0;
+    if (i == blocksize && j == blocksize) return 2; //BOTH
+    if (j == blocksize) return 1; // RIGHT
+    return 0; // LEFT
 }
 
-
-////  TODO check for end condition
-int* get_block_right(int* a, int blocksize, int right, int size)
-{
-    int* block = (int*) malloc(blocksize * sizeof(int));
-    for (int i = size - right * blocksize; i > size - (right + 1) * blocksize; i--)
-    {
-        block[i] = a[i];
-    }
-    return block;
-}
-
-////  TODO check for end condition
-int* get_block_left(int* a, int blocksize, int left)
-{
-    int* block = (int*) malloc(blocksize * sizeof(int));
-    for (int i = left * blocksize; i < (left + 1) * blocksize; i++)
-    {
-        block[i] = a[i];
-    }
-    return block;
-}
-
-void partition_parallel(int* a, int &l, int &r, int &left, int &right, int &sum_l, int &sum_r, int &blocksize, int &size, int &p, int** remaining)
+void partition_parallel(int* a, int &left, int &right, int &sum_l, int &sum_r, int &blocksize, int &size, int &p, bool& _break, int* remaining)
 {
     int thread_id = omp_get_thread_num();
-    int tmp_left, tmp_right;
-    int* leftblock;
-    int* rightblock;
+    int leftoffset, rightoffset;
 
     if(thread_id == 0)
     {
-        p = a[l];
+        p = 5;
     }
     #pragma omp barrier
 
     #pragma omp critical
     {
-        tmp_left = left;
+        leftoffset = left * blocksize;
         left++;
-    };
-    leftblock = get_block_left(a, blocksize, tmp_left);
 
-    #pragma omp critical
-    {
-        tmp_right = right;
-        right++;
+        rightoffset = (right - 1) * blocksize;
+        right--;
     };
-    rightblock = get_block_right(a, blocksize, tmp_right, size);
 
-     while (leftblock != NULL && rightblock != NULL) {
-         int res = neutralize(leftblock, rightblock, p, blocksize);
-         if (res == 1 || res == 2)
+     while (!_break) {
+
+         int res = neutralize(a, leftoffset, rightoffset, p, blocksize);
+
+         if (res == 0 || res == 2)
          {
             #pragma omp critical
              {
-                 tmp_left = left + 1;
-                 left++;
+                 if (left < right && !_break)
+                 {
+                     leftoffset = left * blocksize;
+                     left++;
+                 }
+                 else
+                     _break = true;
              };
-             leftblock = get_block_left(a, blocksize, tmp_left);
          }
-         if (res == 0 || res == 2) {
+         if (res == 1 || res == 2) {
             #pragma omp critical
              {
-                 tmp_right = right + 1;
-                 right++;
+                 if (left < right && !_break)
+                 {
+                     rightoffset = (right - 1) * blocksize;
+                     right--;
+                 }
+                 else
+                     _break = true;
              };
-             rightblock = get_block_right(a, blocksize, tmp_right, size);
          }
      }
 
-     if (leftblock != NULL)
-        remaining[thread_id] = leftblock;
+    #pragma omp barrier
 
-     if (rightblock != NULL)
-        remaining[thread_id] = rightblock;
+    #pragma omp critical
+    {
+        if (leftoffset > rightoffset)
+            remaining[thread_id] = leftoffset;
 
-     sum_l += left * blocksize;
-     sum_r += right * blocksize;
+        if (leftoffset < rightoffset)
+            remaining[thread_id] = rightoffset;
+    };
+
+    #pragma omp critical
+    {
+        sum_l += left * blocksize;
+        sum_r += right * blocksize;
+    };
+
 }
 
 int qs_parallel(int* a, int l, int r, int size)
 {
-    int left = 0, right = 0, sum_l = 0, sum_r = 0, p = 0;
-    int blocksize = 1024;
+    int sum_l = 0, sum_r = 0, p = 0;
+    int blocksize = 64;
     int n_threads = 4;
-    int** remaining = (int**)malloc(n_threads * sizeof(int*));
+    bool _break = false;
 
-    #pragma omp parallel shared(left, right, sum_l, sum_r, a , l, r, blocksize, size, p, remaining) default(none) num_threads(n_threads)
+    int left = 0;
+    int right = size / blocksize;
+
+    int* remaining = (int*)malloc(n_threads * sizeof(int));
+
+    for (int i = 1; i < size; i++)
     {
-        partition_parallel(a, l, r, left, right, sum_l, sum_r, blocksize, size, p, remaining);
+        std::cout << a[i] << " ";
     }
 
+    #pragma omp parallel shared(left, right, sum_l, sum_r, a , l, r, blocksize, size, p, remaining, _break) default(none) num_threads(n_threads)
+    {
+        partition_parallel(a,left, right, sum_l, sum_r, blocksize, size, p, _break, remaining);
+    }
+
+
+    for (int i = 1; i < size; i++)
+    {
+        std::cout << a[i] << " ";
+    }
     return 0;
 }
 
@@ -284,7 +287,8 @@ int main(void)
 
         for (int j = 0; j < n; j++) {
             //arr_1[j] = (rand() << 15) + rand();
-            arr_1[j] = (int) ((rand() << 15) + rand()) %100000;
+            //arr_1[j] = (int) ((rand() << 15) + rand()) %100000;
+            arr_1[j] = rand() %10;
             arr_2[j] = arr_1[j];
             arr_3[j] = arr_1[j];
             arr_4[j] = arr_1[j];
